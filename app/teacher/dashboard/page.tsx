@@ -76,37 +76,27 @@ export default function TeacherDashboard() {
     }
 
     try {
-      // Send a separate request for each row in the table
-      const submissionPromises = rows.map((row) =>
-        fetch('/api/attendance', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            school_id: user.school_id,
-            section: row.section,
-            date: selectedDate,
-            boys_present: parseInt(row.boys_present),
-            girls_present: parseInt(row.girls_present),
-            teacher_id: user.id,
-          }),
-        })
-      )
+      // Switch to the bulk endpoint
+      const response = await fetch('/api/attendance/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          school_id: user.school_id,
+          date: selectedDate,
+          teacher_id: user.id,
+          records: rows, // Send the whole array
+        }),
+      })
 
-      const results = await Promise.all(submissionPromises)
-      const allOk = results.every((res) => res.ok)
+      const data = await response.json()
 
-      if (!allOk) {
-        throw new Error('One or more submissions failed')
-      }
+      if (!response.ok) throw new Error(data.error || 'Submission failed')
 
-      setMessage({ type: 'success', text: 'All attendance records submitted successfully!' })
-
-      // Reset table after success
+      setMessage({ type: 'success', text: 'All records saved successfully!' })
       setRows(sections.map(s => ({ section: s, boys_present: '', girls_present: '' })))
-
       setTimeout(() => setMessage(null), 3000)
-    } catch (err) {
-      setMessage({ type: 'error', text: 'Error submitting attendance. Please try again.' })
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Error submitting attendance.' })
     } finally {
       setLoading(false)
     }
