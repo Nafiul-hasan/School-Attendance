@@ -11,20 +11,31 @@ interface User {
   role: string
 }
 
+interface RowData {
+  section: string
+  boys_present: string
+  girls_present: string
+}
+
 export default function TeacherDashboard() {
   const [user, setUser] = useState<User | null>(null)
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0])
-  const [selectedSection, setSelectedSection] = useState('1A')
-  const [boysPresent, setBoysPresent] = useState('')
-  const [girlsPresent, setGirlsPresent] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
   const [loading, setLoading] = useState(false)
   const router = useRouter()
 
   const sections = ['1A', '1B', '2', '3', '4', '5']
 
+  // The single source of truth for the attendance table
+  const [rows, setRows] = useState<RowData[]>(
+    sections.map((section) => ({
+      section,
+      boys_present: '',
+      girls_present: '',
+    }))
+  )
+
   useEffect(() => {
-    // Check if user is logged in
     const userData = localStorage.getItem('user')
     if (!userData) {
       router.push('/')
@@ -40,6 +51,11 @@ export default function TeacherDashboard() {
     setUser(parsedUser)
   }, [router])
 
+  // Logic to calculate totals for the footer
+  const calculateTotal = (field: 'boys_present' | 'girls_present') => {
+    return rows.reduce((sum, row) => sum + (parseInt(row[field]) || 0), 0)
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setMessage(null)
@@ -51,42 +67,46 @@ export default function TeacherDashboard() {
       return
     }
 
-    if (!boysPresent || !girlsPresent) {
-      setMessage({ type: 'error', text: 'Please enter both boys and girls present' })
+    // Validation: Check if any cell is empty
+    const isIncomplete = rows.some(row => row.boys_present === '' || row.girls_present === '')
+    if (isIncomplete) {
+      setMessage({ type: 'error', text: 'Please enter attendance for all sections (use 0 if none).' })
       setLoading(false)
       return
     }
 
     try {
-      const response = await fetch('/api/attendance', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          school_id: user.school_id,
-          section: selectedSection,
-          date: selectedDate,
-          boys_present: parseInt(boysPresent),
-          girls_present: parseInt(girlsPresent),
-          teacher_id: user.id,
-        }),
-      })
+      // Send a separate request for each row in the table
+      const submissionPromises = rows.map((row) =>
+        fetch('/api/attendance', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            school_id: user.school_id,
+            section: row.section,
+            date: selectedDate,
+            boys_present: parseInt(row.boys_present),
+            girls_present: parseInt(row.girls_present),
+            teacher_id: user.id,
+          }),
+        })
+      )
 
-      const data = await response.json()
+      const results = await Promise.all(submissionPromises)
+      const allOk = results.every((res) => res.ok)
 
-      if (!response.ok || !data.success) {
-        setMessage({ type: 'error', text: data.error || 'Failed to submit attendance' })
-        setLoading(false)
-        return
+      if (!allOk) {
+        throw new Error('One or more submissions failed')
       }
 
-      setMessage({ type: 'success', text: 'Attendance submitted successfully!' })
-      setBoysPresent('')
-      setGirlsPresent('')
+      setMessage({ type: 'success', text: 'All attendance records submitted successfully!' })
 
-      // Clear success message after 3 seconds
+      // Reset table after success
+      setRows(sections.map(s => ({ section: s, boys_present: '', girls_present: '' })))
+
       setTimeout(() => setMessage(null), 3000)
     } catch (err) {
-      setMessage({ type: 'error', text: 'Network error. Please try again.' })
+      setMessage({ type: 'error', text: 'Error submitting attendance. Please try again.' })
     } finally {
       setLoading(false)
     }
@@ -103,7 +123,6 @@ export default function TeacherDashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
       <header className="bg-white shadow">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
           <h1 className="text-2xl font-bold text-gray-900">Teacher Dashboard</h1>
@@ -119,13 +138,11 @@ export default function TeacherDashboard() {
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="bg-white rounded-lg shadow-md p-6">
           <h2 className="text-xl font-semibold text-gray-900 mb-6">Submit Attendance</h2>
 
           <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Date Selection */}
             <div>
               <label htmlFor="date" className="block text-sm font-medium text-gray-700 mb-2">
                 Date
@@ -137,84 +154,74 @@ export default function TeacherDashboard() {
                 onChange={(e) => setSelectedDate(e.target.value)}
                 max={new Date().toISOString().split('T')[0]}
                 required
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700"
               />
             </div>
 
-            {/* Section Selection */}
-            <div>
-              <label htmlFor="section" className="block text-sm font-medium text-gray-700 mb-2">
-                Section
-              </label>
-              <select
-                id="section"
-                value={selectedSection}
-                onChange={(e) => setSelectedSection(e.target.value)}
-                required
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {sections.map((section) => (
-                  <option key={section} value={section}>
-                    Section {section}
-                  </option>
-                ))}
-              </select>
+            <div className="overflow-x-auto">
+              <table className="min-w-full border border-gray-200 text-sm">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="px-4 py-2 border border-gray-300 text-center text-gray-700">Section</th>
+                    <th className="px-4 py-2 border border-gray-300 text-left text-gray-700">Boys Present</th>
+                    <th className="px-4 py-2 border border-gray-300 text-left text-gray-700">Girls Present</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row, idx) => (
+                    <tr key={row.section}>
+                      <td className="px-4 py-2 border border-gray-300 font-bold bg-gray-50 text-center text-gray-700">{row.section}</td>
+                      <td className="px-4 py-2 border border-gray-300 text-gray-700">
+                        <input
+                          type="number"
+                          min="0"
+                          value={row.boys_present}
+                          onChange={(e) => {
+                            const val = e.target.value
+                            setRows(prev => prev.map((r, i) => i === idx ? { ...r, boys_present: val } : r))
+                          }}
+                          className="w-full px-2 py-1 border border-gray-400 rounded bg-white text-gray-900 placeholder-gray-40"
+                          placeholder="0"
+                        />
+                      </td>
+                      <td className="px-4 py-2 border">
+                        <input
+                          type="number"
+                          min="0"
+                          value={row.girls_present}
+                          onChange={(e) => {
+                            const val = e.target.value
+                            setRows(prev => prev.map((r, i) => i === idx ? { ...r, girls_present: val } : r))
+                          }}
+                          className="w-full px-2 py-1 border border-gray-400 rounded bg-white text-gray-900 placeholder-gray-400"
+                          placeholder="0"
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-gray-100 font-bold">
+                  <tr>
+                    <td className="px-4 py-2 border border-gray-300 text-center text-gray-700">Totals:</td>
+                    <td className="px-4 py-2 border border-gray-300 text-blue-700">{calculateTotal('boys_present')}</td>
+                    <td className="px-4 py-2 border border-gray-300 text-pink-700">{calculateTotal('girls_present')}</td>
+                  </tr>
+                </tfoot>
+              </table>
             </div>
 
-            {/* Boys Present */}
-            <div>
-              <label htmlFor="boys" className="block text-sm font-medium text-gray-700 mb-2">
-                Number of Boys Present
-              </label>
-              <input
-                id="boys"
-                type="number"
-                min="0"
-                value={boysPresent}
-                onChange={(e) => setBoysPresent(e.target.value)}
-                required
-                placeholder="Enter number of boys"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-
-            {/* Girls Present */}
-            <div>
-              <label htmlFor="girls" className="block text-sm font-medium text-gray-700 mb-2">
-                Number of Girls Present
-              </label>
-              <input
-                id="girls"
-                type="number"
-                min="0"
-                value={girlsPresent}
-                onChange={(e) => setGirlsPresent(e.target.value)}
-                required
-                placeholder="Enter number of girls"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-
-            {/* Message Display */}
             {message && (
-              <div
-                className={`p-4 rounded-md ${
-                  message.type === 'success'
-                    ? 'bg-green-50 text-green-800'
-                    : 'bg-red-50 text-red-800'
-                }`}
-              >
+              <div className={`p-4 rounded-md ${message.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>
                 {message.text}
               </div>
             )}
 
-            {/* Submit Button */}
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+              className="w-full py-2 px-4 rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
             >
-              {loading ? 'Submitting...' : 'Submit Attendance'}
+              {loading ? 'Submitting All Sections...' : 'Submit Attendance'}
             </button>
           </form>
         </div>
